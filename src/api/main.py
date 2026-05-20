@@ -132,8 +132,7 @@ try:
 except (ImportError, SyntaxError) as e:
     print(f"⚠️  Warning: Innovation modules not available ({e})")
     INNOVATIONS_AVAILABLE = False
-    INNOVATIONS_AVAILABLE = False
-    
+       
     # Demo mode functions
     def compute_risk_score(transaction: dict, biometrics: dict = None, **kwargs) -> dict:
         """Enhanced risk scorer with graph-based mule account detection"""
