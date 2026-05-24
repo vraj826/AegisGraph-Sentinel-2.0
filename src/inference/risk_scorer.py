@@ -443,11 +443,11 @@ def compute_risk_score(
                             event_type="graph_pattern",
                             metadata={"pattern": "chain", "descendants": len(descendants)},
                         )
-            except:
-                        print(f"⚠️ Chain pattern: {source_account} feeds into {len(descendants)} accounts")
             except Exception as e:
                 logger.error(f"Error: {e}")
                 pass
+            except:
+                print(f"⚠️ Chain pattern: {source_account} feeds into {len(descendants)} accounts")
             
             # Betweenness centrality (key intermediary in network)
             try:
