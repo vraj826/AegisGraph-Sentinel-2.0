@@ -483,14 +483,14 @@ def compute_risk_score(
                     
                     # Spike detection: configurable thresholds (from thresholds.yaml)
                     spike_threshold = max(
-                        baseline_avg + self.lateral_movement_std * baseline_std,
-                        baseline_avg * self.lateral_movement_mult
+                        baseline_avg + config_defaults.DEFAULT_LATERAL_MOVEMENT_STD_MULTIPLIER * baseline_std,
+                        baseline_avg * config_defaults.DEFAULT_LATERAL_MOVEMENT_THRESHOLD_MULTIPLIER
                     )
                     
                     if current_score > spike_threshold and baseline_avg > 0:
                         lateral_movement_detected = True
                         lateral_movement_reason = f"Lateral movement detected: {source_account} betweenness centrality spiked from baseline {baseline_avg:.4f} to {current_score:.4f} (MITRE ATT&CK TA0008)"
-                        graph_risk += self.lateral_movement_risk_increment
+                        graph_risk += config_defaults.DEFAULT_LATERAL_MOVEMENT_RISK_INCREMENT
                         _inference_logger.warning(
                             f"Lateral movement detected for {source_account}",
                             event_type="lateral_movement",
