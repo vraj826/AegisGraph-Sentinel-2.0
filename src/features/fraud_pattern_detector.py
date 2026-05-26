@@ -6,14 +6,20 @@ Detects specific fraud patterns in transaction graphs:
 - Fan-in/Fan-out hubs
 - Velocity anomalies
 - Temporal fraud chains
+- Layering chains (betweenness centrality)
+- Super-mules (PageRank analysis)
+- Fraud rings (clique detection)
+- Temporal decay weighting
 """
 
 import logging
 import numpy as np
-from typing import Dict, List, Set, Tuple
+import math
+from typing import Dict, List, Set, Tuple, Optional
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import networkx as nx
+from dataclasses import dataclass
 
 from ..scoring import ScoreCalculator
 
@@ -507,3 +513,526 @@ class FraudPatternDetector:
                 'total': 0.2,
             }
         )
+
+    # ============================================================================
+    # CENTRALITY ANALYSIS METHODS (Issue #5 Enhancement)
+    # ============================================================================
+
+    def detect_layering_chains(
+        self,
+        transactions: List[Dict],
+        reference_time: Optional[datetime] = None,
+        betweenness_threshold: float = 0.6,
+    ) -> List[Dict]:
+        """
+        Detect money laundering layering chains using betweenness centrality.
+        
+        Layering chains are linear A→B→C→D structures where intermediate
+        accounts (B, C) have high betweenness centrality (act as bridges).
+        
+        Args:
+            transactions: List of transaction dictionaries
+            reference_time: Reference time for scoring (default: now)
+            betweenness_threshold: Minimum betweenness to flag (0.0-1.0)
+        
+        Returns:
+            List of detected layering chains with scores
+        """
+        if reference_time is None:
+            reference_time = datetime.now(timezone.utc)
+        
+        graph = self._build_transfer_graph(transactions)
+        
+        if len(graph.nodes()) < 3:
+            return []
+        
+        detected_chains = []
+        
+        try:
+            # Calculate betweenness centrality
+            betweenness = nx.betweenness_centrality(graph, normalized=True)
+            
+            # Identify high-betweenness nodes (potential intermediaries)
+            intermediaries = {
+                node: score for node, score in betweenness.items()
+                if score >= betweenness_threshold
+            }
+            
+            if not intermediaries:
+                return []
+            
+            # Find linear chains through intermediaries
+            for intermediate in intermediaries:
+                predecessors = list(graph.predecessors(intermediate))
+                successors = list(graph.successors(intermediate))
+                
+                for pred in predecessors[:3]:  # Limit to avoid explosion
+                    for succ in successors[:3]:
+                        # Found A → B → C pattern (B is intermediate)
+                        chain = [pred, intermediate, succ]
+                        chain_txns = self._get_chain_transactions(chain, graph, transactions)
+                        
+                        if chain_txns and self._verify_timing_constraint(chain_txns, 24):
+                            chain_score = self._score_layering_chain(
+                                chain, graph, chain_txns, betweenness[intermediate]
+                            )
+                            
+                            detected_chains.append({
+                                'type': 'LAYERING_CHAIN',
+                                'chain_accounts': chain,
+                                'chain_length': 3,
+                                'betweenness_scores': {
+                                    node: betweenness.get(node, 0.0) for node in chain
+                                },
+                                'total_amount': sum(
+                                    self._txn_value(t, 'amount', 0) for t in chain_txns
+                                ),
+                                'risk_score': chain_score,
+                                'detected_at': reference_time,
+                                'pattern': 'LINEAR_LAYERING',
+                            })
+        
+        except nx.NetworkXError as e:
+            logger.warning("Error in layering chain detection: %s", e)
+        
+        return sorted(detected_chains, key=lambda x: x['risk_score'], reverse=True)
+
+    def detect_super_mules(
+        self,
+        transactions: List[Dict],
+        reference_time: Optional[datetime] = None,
+        pagerank_threshold: float = 0.7,
+        volume_threshold_percentile: float = 0.75,
+    ) -> List[Dict]:
+        """
+        Identify super-mules using PageRank analysis.
+        
+        Super-mules have:
+        - High PageRank (disproportionate influence in fraud network)
+        - High transaction volume
+        - Incoming transfers from high-value sources
+        
+        Args:
+            transactions: List of transaction dictionaries
+            reference_time: Reference time for scoring
+            pagerank_threshold: Minimum PageRank to flag (normalized 0-1)
+            volume_threshold_percentile: Volume percentile threshold (0-1)
+        
+        Returns:
+            List of detected super-mules with scores
+        """
+        if reference_time is None:
+            reference_time = datetime.now(timezone.utc)
+        
+        graph = self._build_transfer_graph(transactions)
+        
+        if len(graph.nodes()) < 2:
+            return []
+        
+        detected_super_mules = []
+        
+        try:
+            # Calculate PageRank (weighted by transaction volume)
+            pagerank = nx.pagerank(graph, alpha=0.85, max_iter=100, weight='total_amount')
+            
+            # Normalize PageRank scores
+            max_pr = max(pagerank.values()) if pagerank else 1.0
+            normalized_pr = {k: v / max_pr for k, v in pagerank.items()}
+            
+            # Calculate transaction volumes per account (incoming)
+            incoming_volumes = defaultdict(float)
+            for source, target, data in graph.edges(data=True):
+                incoming_volumes[target] += data.get('total_amount', 0)
+            
+            # Normalize volumes
+            max_volume = max(incoming_volumes.values()) if incoming_volumes else 1.0
+            normalized_volumes = {
+                k: v / max_volume for k, v in incoming_volumes.items()
+            }
+            
+            # Find super-mules: high PageRank + high volume
+            for account, pr_score in normalized_pr.items():
+                if pr_score >= pagerank_threshold:
+                    volume = normalized_volumes.get(account, 0.0)
+                    
+                    # Score: weighted combination of PageRank and volume
+                    super_mule_score = (0.6 * pr_score) + (0.4 * volume)
+                    
+                    in_degree = graph.in_degree(account)
+                    total_received = incoming_volumes.get(account, 0.0)
+                    
+                    detected_super_mules.append({
+                        'type': 'SUPER_MULE',
+                        'account': account,
+                        'pagerank_score': float(pr_score),
+                        'volume_score': float(volume),
+                        'combined_score': float(super_mule_score),
+                        'incoming_transfers': int(in_degree),
+                        'total_received': float(total_received),
+                        'risk_score': float(super_mule_score),
+                        'detected_at': reference_time,
+                        'pattern': 'HIGH_INFLUENCE_HUB',
+                    })
+        
+        except nx.NetworkXError as e:
+            logger.warning("Error in super-mule detection: %s", e)
+        
+        return sorted(detected_super_mules, key=lambda x: x['risk_score'], reverse=True)
+
+    def detect_fraud_rings(
+        self,
+        transactions: List[Dict],
+        reference_time: Optional[datetime] = None,
+        min_clique_size: int = 3,
+        max_clique_size: int = 8,
+        density_threshold: float = 0.75,
+    ) -> List[Dict]:
+        """
+        Detect closed fraud rings using clique detection.
+        
+        Fraud rings are near-complete subgraphs where:
+        - All or most accounts send to all others (high density)
+        - Transfers are synchronized in time
+        - Accounts are new or previously dormant
+        
+        Args:
+            transactions: List of transaction dictionaries
+            reference_time: Reference time for scoring
+            min_clique_size: Minimum clique size to consider
+            max_clique_size: Maximum clique size (computational limit)
+            density_threshold: Minimum edge density (0.0-1.0)
+        
+        Returns:
+            List of detected fraud rings with scores
+        """
+        if reference_time is None:
+            reference_time = datetime.now(timezone.utc)
+        
+        # Build undirected graph for clique detection
+        graph = self._build_transfer_graph(transactions)
+        undirected_graph = graph.to_undirected()
+        
+        if len(undirected_graph.nodes()) < min_clique_size:
+            return []
+        
+        detected_rings = []
+        
+        try:
+            # Find all maximal cliques
+            cliques = list(nx.find_cliques(undirected_graph))
+            
+            for clique in cliques:
+                if min_clique_size <= len(clique) <= max_clique_size:
+                    # Calculate clique density
+                    clique_subgraph = undirected_graph.subgraph(clique)
+                    density = nx.density(clique_subgraph)
+                    
+                    if density >= density_threshold:
+                        # Get transactions within this clique
+                        clique_txns = self._get_clique_transactions(
+                            clique, graph, transactions
+                        )
+                        
+                        if clique_txns:
+                            # Score the fraud ring
+                            ring_score = self._score_fraud_ring_clique(
+                                clique, clique_subgraph, clique_txns,
+                                density, reference_time
+                            )
+                            
+                            detected_rings.append({
+                                'type': 'FRAUD_RING',
+                                'ring_accounts': clique,
+                                'ring_size': len(clique),
+                                'density': float(density),
+                                'total_amount': sum(
+                                    self._txn_value(t, 'amount', 0) for t in clique_txns
+                                ),
+                                'transaction_count': len(clique_txns),
+                                'risk_score': float(ring_score),
+                                'detected_at': reference_time,
+                                'pattern': 'CLOSED_FRAUD_RING',
+                                'sync_score': float(
+                                    self._calculate_ring_synchronization(clique_txns)
+                                ),
+                            })
+        
+        except nx.NetworkXError as e:
+            logger.warning("Error in fraud ring detection: %s", e)
+        
+        return sorted(detected_rings, key=lambda x: x['risk_score'], reverse=True)
+
+    def apply_temporal_decay_to_pattern(
+        self,
+        pattern: Dict,
+        decay_rate: float = 0.1,
+        reference_time: Optional[datetime] = None,
+    ) -> Dict:
+        """
+        Apply temporal decay weighting to a fraud pattern.
+        
+        Recent suspicious activity weighted more than historical.
+        Decay formula: weight = e^(-decay_rate × days_elapsed)
+        
+        Args:
+            pattern: Detected fraud pattern dictionary
+            decay_rate: Exponential decay rate (higher = faster decay)
+            reference_time: Reference time (default: now)
+        
+        Returns:
+            Pattern with adjusted risk score and decay weight
+        """
+        if reference_time is None:
+            reference_time = datetime.now(timezone.utc)
+        
+        detected_at = pattern.get('detected_at')
+        if not detected_at:
+            return pattern
+        
+        # Ensure datetime objects are timezone-aware
+        if isinstance(detected_at, datetime) and detected_at.tzinfo is None:
+            detected_at = detected_at.replace(tzinfo=timezone.utc)
+        if reference_time.tzinfo is None:
+            reference_time = reference_time.replace(tzinfo=timezone.utc)
+        
+        days_elapsed = (reference_time - detected_at).days
+        decay_weight = self._calculate_temporal_decay(
+            detected_at, decay_rate, reference_time
+        )
+        
+        # Adjust risk score
+        original_score = pattern.get('risk_score', 0.0)
+        decayed_score = original_score * decay_weight
+        
+        pattern['temporal_decay_factor'] = float(decay_weight)
+        pattern['original_risk_score'] = float(original_score)
+        pattern['risk_score'] = float(decayed_score)
+        pattern['days_elapsed'] = int(days_elapsed)
+        
+        return pattern
+
+    # ============================================================================
+    # Centrality Helper Methods
+    # ============================================================================
+
+    def _calculate_temporal_decay(
+        self,
+        timestamp: datetime,
+        decay_rate: float = 0.1,
+        reference_time: Optional[datetime] = None,
+    ) -> float:
+        """
+        Calculate exponential temporal decay weight.
+        
+        Recent events (today) = 1.0
+        Older events = progressively lower weight
+        
+        decay = e^(-decay_rate × days_elapsed)
+        
+        Args:
+            timestamp: Event timestamp
+            decay_rate: Decay constant (default 0.1)
+            reference_time: Reference time (default: now)
+        
+        Returns:
+            Weight 0.0-1.0 (higher = more recent)
+        """
+        if reference_time is None:
+            reference_time = datetime.now(timezone.utc)
+        
+        # Ensure timezone-aware
+        if isinstance(timestamp, datetime) and timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        if reference_time.tzinfo is None:
+            reference_time = reference_time.replace(tzinfo=timezone.utc)
+        
+        days_elapsed = (reference_time - timestamp).days
+        weight = math.exp(-decay_rate * days_elapsed)
+        
+        return max(0.0, min(1.0, weight))
+
+    def _score_layering_chain(
+        self,
+        chain: List[str],
+        graph: nx.DiGraph,
+        transactions: List[Dict],
+        intermediate_betweenness: float,
+    ) -> float:
+        """
+        Score layering chain risk.
+        
+        Factors:
+        - Betweenness of intermediate nodes
+        - Uniform transfer amounts (deliberate obfuscation)
+        - Rapid transfers (chain completion)
+        """
+        # Betweenness factor (higher = more bridging)
+        betweenness_score = min(intermediate_betweenness, 1.0)
+        
+        # Uniformity of amounts
+        uniformity_score = 0.0
+        if transactions:
+            amounts = [self._txn_value(t, 'amount', 0) for t in transactions]
+            if len(amounts) > 1:
+                cv = np.std(amounts) / (np.mean(amounts) + 1e-6)
+                # Low CV (uniform) is suspicious
+                uniformity_score = max(0.0, 1.0 - min(cv, 1.0))
+        
+        # Transfer speed
+        velocity_score = 0.0
+        if transactions and len(transactions) > 1:
+            timestamps = []
+            for t in transactions:
+                ts = self._txn_value(t, 'timestamp')
+                if isinstance(ts, str):
+                    ts = datetime.fromisoformat(ts)
+                if ts:
+                    timestamps.append(ts)
+            
+            if len(timestamps) > 1:
+                time_span_hours = (max(timestamps) - min(timestamps)).total_seconds() / 3600
+                # Rapid chain (< 6 hours) is suspicious
+                velocity_score = max(0.0, 1.0 - (time_span_hours / 6.0))
+        
+        return ScoreCalculator.aggregate_scores(
+            {
+                'betweenness': betweenness_score,
+                'uniformity': uniformity_score,
+                'velocity': velocity_score,
+            },
+            {
+                'betweenness': 0.5,
+                'uniformity': 0.3,
+                'velocity': 0.2,
+            }
+        )
+
+    def _score_fraud_ring_clique(
+        self,
+        clique: List[str],
+        clique_graph: nx.Graph,
+        transactions: List[Dict],
+        density: float,
+        reference_time: datetime,
+    ) -> float:
+        """
+        Score fraud ring (clique) risk.
+        
+        Factors:
+        - Clique density (completeness)
+        - Transaction synchronization
+        - Account age (new accounts higher risk)
+        """
+        # Density factor (higher = more complete ring)
+        density_score = density
+        
+        # Synchronization: transactions clustered in time
+        sync_score = self._calculate_ring_synchronization(transactions)
+        
+        # Size factor: larger rings more complex/risky
+        size_score = min(len(clique) / 10.0, 1.0)
+        
+        return ScoreCalculator.aggregate_scores(
+            {
+                'density': density_score,
+                'synchronization': sync_score,
+                'size': size_score,
+            },
+            {
+                'density': 0.5,
+                'synchronization': 0.3,
+                'size': 0.2,
+            }
+        )
+
+    def _calculate_ring_synchronization(
+        self,
+        transactions: List[Dict],
+    ) -> float:
+        """
+        Measure synchronization of ring transfers.
+        
+        Coordinated fraud shows clustered timestamps.
+        Random transfers would be spread across time.
+        
+        Returns:
+            Score 0.0-1.0 (higher = more synchronized)
+        """
+        if not transactions or len(transactions) < 2:
+            return 0.0
+        
+        # Extract timestamps
+        timestamps = []
+        for t in transactions:
+            ts = self._txn_value(t, 'timestamp')
+            if isinstance(ts, str):
+                try:
+                    ts = datetime.fromisoformat(ts)
+                except (ValueError, TypeError):
+                    continue
+            if isinstance(ts, datetime):
+                timestamps.append(ts)
+        
+        if len(timestamps) < 2:
+            return 0.0
+        
+        # Calculate time between consecutive transfers
+        timestamps.sort()
+        time_diffs = []
+        for i in range(len(timestamps) - 1):
+            diff = (timestamps[i + 1] - timestamps[i]).total_seconds() / 60  # minutes
+            time_diffs.append(diff)
+        
+        if not time_diffs:
+            return 0.0
+        
+        # High clustering = low variance in time differences
+        mean_diff = np.mean(time_diffs)
+        std_diff = np.std(time_diffs)
+        
+        # Coefficient of variation (lower CV = more synchronized)
+        cv = std_diff / (mean_diff + 1e-6)
+        
+        # Convert to sync score: 0-1 (0=random, 1=perfect sync)
+        sync_score = max(0.0, 1.0 - min(cv, 1.0))
+        
+        return sync_score
+
+    def _get_chain_transactions(
+        self,
+        chain: List[str],
+        graph: nx.DiGraph,
+        transactions: List[Dict],
+    ) -> List[Dict]:
+        """Extract transactions forming a linear chain"""
+        chain_txns = []
+        
+        for i in range(len(chain) - 1):
+            source = chain[i]
+            target = chain[i + 1]
+            
+            for txn in transactions:
+                if (self._txn_value(txn, 'source_account') == source and
+                    self._txn_value(txn, 'target_account') == target):
+                    chain_txns.append(txn)
+        
+        return chain_txns
+
+    def _get_clique_transactions(
+        self,
+        clique: List[str],
+        graph: nx.DiGraph,
+        transactions: List[Dict],
+    ) -> List[Dict]:
+        """Extract all transactions within a clique"""
+        clique_set = set(clique)
+        clique_txns = []
+        
+        for txn in transactions:
+            source = self._txn_value(txn, 'source_account')
+            target = self._txn_value(txn, 'target_account')
+            
+            if source in clique_set and target in clique_set:
+                clique_txns.append(txn)
+        
+        return clique_txns
