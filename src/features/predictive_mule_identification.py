@@ -96,6 +96,14 @@ class PredictiveMuleScorer:
         self.device_history: Dict[str, int] = {}  # device_id -> count
         self.ip_history: Dict[str, int] = {}  # ip -> count
         self.referral_history: Dict[str, int] = {}  # referral_code -> count
+
+    def _normalize_referral_code(self, referral_code: Optional[str]) -> Optional[str]:
+        """Normalize referral codes so empty values do not poison the same bucket."""
+        if not referral_code:
+            return None
+
+        normalized = referral_code.strip().lower()
+        return normalized or None
     
     def score_account_opening(
         self,
@@ -133,7 +141,7 @@ class PredictiveMuleScorer:
                 referrer_url=kwargs.get('referrer',''),
                 initial_deposit=kwargs.get('initial_deposit',0.0),
                 account_type=kwargs.get('account_type',''),
-                referral_code=kwargs.get('referral',''),
+                referral_code=self._normalize_referral_code(kwargs.get('referral')),
                 existing_customer_connections=kwargs.get('existing_customer_connections',0),
             )
         # Update temporal cache
@@ -213,7 +221,8 @@ class PredictiveMuleScorer:
         # Counts from history
         same_device_count = self.device_history.get(account_data.device_id, 0)
         same_ip_count = self.ip_history.get(account_data.ip_address, 0)
-        same_referral_count = self.referral_history.get(account_data.referral_code or '', 0)
+        referral_code = self._normalize_referral_code(account_data.referral_code)
+        same_referral_count = self.referral_history.get(referral_code, 0) if referral_code else 0
         
         # Temporal clustering
         recent_count = len([
@@ -485,8 +494,8 @@ class PredictiveMuleScorer:
         self.ip_history[ip] = self.ip_history.get(ip, 0) + 1
         
         # Update referral history
-        if account_data.referral_code:
-            ref = account_data.referral_code
+        ref = self._normalize_referral_code(account_data.referral_code)
+        if ref:
             self.referral_history[ref] = self.referral_history.get(ref, 0) + 1
 
         # Prevent unbounded memory growth by capping dictionary sizes
