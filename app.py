@@ -1242,7 +1242,70 @@ elif page == "📊 Risk Analytics":
             
     st.markdown("---")
     
-    st.subheader("📈 Realtime Alert Analytics")
+    # Fraud Heatmap Visualization
+    st.subheader("🗺️ Global Threat Telemetry")
+    st.markdown("**Real-time geolocation of active fraud vectors**")
+    
+    if 'realtime_alerts' in st.session_state and len(st.session_state.realtime_alerts) > 0:
+        active_threats = st.session_state.realtime_alerts
+        
+        if active_threats:
+            geo_df = pd.DataFrame(active_threats)
+            
+            size_map = {"Critical": 24, "High": 16, "Medium": 10, "Low": 6}
+            color_map = {"Critical": "#ef4444", "High": "#f97316", "Medium": "#f59e0b", "Low": "#10b981"}
+            
+            geo_df['size'] = geo_df['severity'].map(size_map)
+            geo_df['color'] = geo_df['severity'].map(color_map)
+            
+            fig_geo = go.Figure(go.Scattergeo(
+                lon = geo_df['lon'],
+                lat = geo_df['lat'],
+                text = geo_df['title'] + '<br>' + geo_df['severity'],
+                mode = 'markers',
+                marker = dict(
+                    size = geo_df['size'],
+                    color = geo_df['color'],
+                    line = dict(width=1, color='rgba(255, 255, 255, 0.5)'),
+                    opacity = 0.8
+                )
+            ))
+            
+            fig_geo.update_geos(
+                projection_type="natural earth",
+                showcoastlines=True, coastlinecolor="rgba(255, 255, 255, 0.1)",
+                showland=True, landcolor="rgba(30, 41, 59, 0.5)",
+                showocean=True, oceancolor="rgba(15, 23, 42, 0.5)",
+                showlakes=True, lakecolor="rgba(15, 23, 42, 0.5)",
+                showcountries=True, countrycolor="rgba(255, 255, 255, 0.1)",
+                bgcolor="rgba(0,0,0,0)"
+            )
+            
+            fig_geo.update_layout(
+                height=350,
+                margin={"r":0,"t":0,"l":0,"b":0},
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)"
+            )
+            st.plotly_chart(fig_geo, use_container_width=True)
+        else:
+            st.info("No active geolocation threats detected.")
+            
+    st.markdown("---")
+    
+    export_col1, export_col2 = st.columns([4, 1])
+    with export_col1:
+        st.subheader("📈 Realtime Alert Analytics")
+    with export_col2:
+        if 'realtime_alerts' in st.session_state and st.session_state.realtime_alerts:
+            csv_data = pd.DataFrame(st.session_state.realtime_alerts).to_csv(index=False)
+            st.download_button(
+                label="📥 Export Intel",
+                data=csv_data,
+                file_name=f"threat_intel_export_{int(time.time())}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
     summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
     with summary_col1:
         st.metric("Active Threats", f"{active_threats if 'realtime_alerts' in st.session_state else 12}", "+2 this hour")
@@ -1261,10 +1324,10 @@ elif page == "📊 Risk Analytics":
         # Initialize alerts
         if 'realtime_alerts' not in st.session_state:
             st.session_state.realtime_alerts = [
-                {"id": "AL-1001", "time": pd.Timestamp.now() - pd.Timedelta(seconds=45), "severity": "Critical", "title": "Mule Ring Topology Detected (Fan-out)", "category": "Graph", "status": "Active"},
-                {"id": "AL-1002", "time": pd.Timestamp.now() - pd.Timedelta(seconds=120), "severity": "High", "title": "Velocity Spike on ACC00003254", "category": "Velocity", "status": "Active"},
-                {"id": "AL-1003", "time": pd.Timestamp.now() - pd.Timedelta(minutes=5), "severity": "Medium", "title": "Hesitation Cadence Anomaly", "category": "Biometric", "status": "Active"},
-                {"id": "AL-1004", "time": pd.Timestamp.now() - pd.Timedelta(minutes=15), "severity": "Low", "title": "Unusual Device Fingerprint", "category": "Device", "status": "Active"}
+                {"id": "AL-1001", "time": pd.Timestamp.now() - pd.Timedelta(seconds=45), "severity": "Critical", "title": "Mule Ring Topology Detected (Fan-out)", "category": "Graph", "lat": 51.50, "lon": -0.12, "status": "Active"},
+                {"id": "AL-1002", "time": pd.Timestamp.now() - pd.Timedelta(seconds=120), "severity": "High", "title": "Velocity Spike on ACC00003254", "category": "Velocity", "lat": 40.71, "lon": -74.00, "status": "Active"},
+                {"id": "AL-1003", "time": pd.Timestamp.now() - pd.Timedelta(minutes=5), "severity": "Medium", "title": "Hesitation Cadence Anomaly", "category": "Biometric", "lat": 35.67, "lon": 139.65, "status": "Active"},
+                {"id": "AL-1004", "time": pd.Timestamp.now() - pd.Timedelta(minutes=15), "severity": "Low", "title": "Unusual Device Fingerprint", "category": "Device", "lat": 1.35, "lon": 103.81, "status": "Active"}
             ]
             
         # Simulate incoming alerts if live
@@ -1281,12 +1344,16 @@ elif page == "📊 Risk Analytics":
                 "Critical": ["Mule Ring Topology Detected", "Large Value Extraction", "Account Takeover Pattern"]
             }
             
+            hubs = [(40.71, -74.00), (51.50, -0.12), (35.67, 139.65), (1.35, 103.81), (37.77, -122.41), (50.11, 8.68)]
+            base_lat, base_lon = hubs[np.random.randint(0, len(hubs))]
             new_alert = {
                 "id": f"AL-{int(time.time())}",
                 "time": pd.Timestamp.now(),
                 "severity": sev,
                 "title": np.random.choice(titles[sev]),
                 "category": categories[sev],
+                "lat": base_lat + np.random.normal(0, 5.0),
+                "lon": base_lon + np.random.normal(0, 5.0),
                 "status": "Active"
             }
             # Prepend and keep max 50 alerts safely
@@ -1310,6 +1377,27 @@ elif page == "📊 Risk Analytics":
             and (search_term.lower() in a["title"].lower() or search_term.lower() in a["category"].lower() or search_term.lower() in a["id"].lower())
         ]
         
+        # Investigation Timeline
+        if 'investigate_alert_id' in st.session_state and st.session_state.investigate_alert_id:
+            inv_id = st.session_state.investigate_alert_id
+            target_alert = next((a for a in st.session_state.realtime_alerts if a['id'] == inv_id), None)
+            if target_alert:
+                st.info(f"🔎 **Active Investigation:** {target_alert['title']} (`{inv_id}`)")
+                timeline_col1, timeline_col2 = st.columns([3, 1])
+                
+                with timeline_col1:
+                    t = target_alert['time']
+                    st.markdown(f"**{(t - pd.Timedelta(minutes=45)).strftime('%H:%M:%S')}** &nbsp; 🟢 Initial Login (Normal IP)")
+                    st.markdown(f"**{(t - pd.Timedelta(minutes=10)).strftime('%H:%M:%S')}** &nbsp; 🟡 Security Settings Changed (2FA Disabled)")
+                    st.markdown(f"**{(t - pd.Timedelta(minutes=2)).strftime('%H:%M:%S')}** &nbsp; 🔴 Large Transfer Initiated")
+                    st.markdown(f"**{t.strftime('%H:%M:%S')}** &nbsp; 🚨 **ALERT TRIGGERED:** {target_alert['title']}")
+                with timeline_col2:
+                    st.markdown("<br><br>", unsafe_allow_html=True)
+                    if st.button("Close Investigation", use_container_width=True, type="primary"):
+                        st.session_state.investigate_alert_id = None
+                        st.rerun()
+                st.markdown("---")
+
         # Render Alerts
         st.markdown('<div style="max-height: 400px; overflow-y: auto; padding-right: 10px; margin-top: 15px;">', unsafe_allow_html=True)
         if not filtered_alerts:
@@ -1321,7 +1409,7 @@ elif page == "📊 Risk Analytics":
                 opacity = "0.5" if is_resolved else "1.0"
                 status_badge = "Resolved" if is_resolved else alert['severity']
                 
-                alert_col, btn_col = st.columns([5, 1])
+                alert_col, inv_col, btn_col = st.columns([4, 1, 1])
                 with alert_col:
                     html = f"""
                     <div class="alert-card" style="opacity: {opacity}; margin-bottom: 0;">
@@ -1331,6 +1419,10 @@ elif page == "📊 Risk Analytics":
                     </div>
                     """
                     st.markdown(html, unsafe_allow_html=True)
+                with inv_col:
+                    if st.button("Investigate", key=f"inv_{alert['id']}", use_container_width=True):
+                        st.session_state.investigate_alert_id = alert['id']
+                        st.rerun()
                 with btn_col:
                     if not is_resolved:
                         if st.button("Resolve", key=f"resolve_{alert['id']}", use_container_width=True):
