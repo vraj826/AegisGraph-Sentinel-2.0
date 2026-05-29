@@ -110,6 +110,7 @@ class HoneypotEscrowManager:
         
         # Active honeypots
         self.active_honeypots: Dict[str, HoneypotTransaction] = {}
+        self._active_honeypots_by_account: Dict[str, HoneypotTransaction] = {}
         
         # Historical honeypots
         self.honeypot_history: List[HoneypotTransaction] = []
@@ -208,6 +209,7 @@ class HoneypotEscrowManager:
         
         with self._lock:
             self.active_honeypots[honeypot_id] = honeypot
+            self._active_honeypots_by_account[target_account] = honeypot
             self.stats['total_activated'] += 1
         
         print(f"🍯 HONEYPOT ACTIVATED: {honeypot_id}")
@@ -238,13 +240,10 @@ class HoneypotEscrowManager:
         Returns:
             Alert dictionary if honeypot triggered, None otherwise
         """
-        # Find honeypot for this account
         with self._lock:
-            honeypot = None
-            for hp_id, hp in self.active_honeypots.items():
-                if hp.target_account == account and not hp.released:
-                    honeypot = hp
-                    break
+            honeypot = self._active_honeypots_by_account.get(account)
+            if honeypot is not None and honeypot.released:
+                honeypot = None
         
         if honeypot is None:
             return None  # Not a honeypot account
@@ -371,6 +370,7 @@ class HoneypotEscrowManager:
             if len(self.honeypot_history) > 10000:
                 self.honeypot_history = self.honeypot_history[-5000:]
             del self.active_honeypots[honeypot_id]
+            self._active_honeypots_by_account.pop(honeypot.target_account, None)
 
         return True
     
@@ -480,6 +480,7 @@ class HoneypotEscrowManager:
             if len(self.honeypot_history) > 10000:
                 self.honeypot_history = self.honeypot_history[-5000:]
             del self.active_honeypots[honeypot_id]
+            self._active_honeypots_by_account.pop(honeypot.target_account, None)
     
     def get_statistics(self) -> Dict:
         """Get honeypot system statistics"""
