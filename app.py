@@ -1585,11 +1585,15 @@ elif page == "📊 Risk Analytics":
                 
                 alert_col, inv_col, btn_col = st.columns([4, 1, 1])
                 with alert_col:
+                    aria_label = (
+                        f"{alert['severity']} alert {alert['title']} in {alert['category']} category, "
+                        f"status {status_badge}, alert id {alert['id']}, time {time_str}"
+                    )
                     html = f"""
-                    <div class="alert-card" style="opacity: {opacity}; margin-bottom: 0;">
+                    <div class="alert-card" style="opacity: {opacity}; margin-bottom: 0;" role="article" aria-label="{aria_label}">
                         <span class="alert-time">{time_str}</span>
                         <span class="alert-title">[{alert['category']}] {alert['title']} <span style="color:#64748b; font-size:0.75rem; margin-left:8px;">#{alert['id']}</span></span>
-                        <span class="severity-badge severity-{alert['severity']}">{status_badge}</span>
+                        <span class="severity-badge severity-{alert['severity']}" role="status" aria-live="polite" aria-label="Alert status {status_badge}">{status_badge}</span>
                     </div>
                     """
                     st.markdown(html, unsafe_allow_html=True)
