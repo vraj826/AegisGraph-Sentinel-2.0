@@ -68,6 +68,9 @@ class LateralMovementDetector:
                     self.active_graph[src_account][dst_account]['weight'] += 1
                 else:
                     self.active_graph.add_edge(src_account, dst_account, weight=1)
+                if self.active_graph.number_of_nodes() > 10000:
+                    nodes_to_remove = list(self.active_graph.nodes())[:100]
+                    self.active_graph.remove_nodes_from(nodes_to_remove)
 
     def _get_approx_graph(self, account_id, max_hops=2):
         """Reconstructs a bounded local graph around an account (Redis mode)."""
