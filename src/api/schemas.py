@@ -4,7 +4,7 @@ Pydantic schemas for API request/response validation
 # Schema validation for all fraud detection endpoints
 
 from pydantic import BaseModel, Field, field_validator, model_validator, AliasChoices, ConfigDict
-from typing import Optional, List, Dict, Union
+from typing import Optional, List, Dict, Union, Any
 from src.api.validators import (
     TransactionValidator,
     ValidationError,
@@ -238,6 +238,7 @@ class HealthCheckResponse(BaseModel):
     uptime_seconds: Optional[float] = Field(default=None, description="Service uptime in seconds")
     requests_processed: Optional[int] = Field(default=None, description="Total requests processed")
     timestamp: Optional[str] = Field(default=None, description="Response timestamp")
+    services_health: Optional[Dict[str, Dict[str, Any]]] = Field(default=None, description="Detailed health stats for registered services")
 
 
 class ModelInfo(BaseModel):
@@ -277,7 +278,9 @@ class ErrorResponse(BaseModel):
 class VoiceAnalysisRequest(BaseModel):
     """Request for voice stress analysis"""
     transaction_id: str = Field(description="Transaction ID for correlation")
-    audio_base64: str = Field(max_length=5_000_000, description="Base64-encoded audio WAV file (max 30 seconds)")
+    # Keep this small so the API accepts only short voice clips and rejects
+    # large uploads before they can consume excessive memory or CPU.
+    audio_base64: str = Field(max_length=500_000, description="Base64-encoded audio WAV file (max 30 seconds)")
     sample_rate: int = Field(default=16000, description="Audio sample rate in Hz")
     
     @field_validator('sample_rate')
