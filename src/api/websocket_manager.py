@@ -14,7 +14,7 @@ class ConnectionState:
 class WebSocketManager:
     """Manages active WebSocket connections with bounded reconnect recovery and stale cleanup."""
     
-    def __init__(self, heartbeat_timeout: float = 30.0, max_reconnect_attempts: int = 5):
+    def __init__(self, heartbeat_timeout: float = 60.0, max_reconnect_attempts: int = 5):
         self.active_connections: Dict[str, ConnectionState] = {}
         self.disconnect_history: Dict[str, list] = {}  # client_id -> list of disconnect timestamps
         self.heartbeat_timeout = heartbeat_timeout

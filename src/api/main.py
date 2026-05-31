@@ -1562,9 +1562,12 @@ async def lifespan(app: FastAPI):
     lifecycle_manager.register_shutdown("stop_watchdog", watchdog.stop)
 
     async def _stale_cleanup_loop():
-        while True:
-            await asyncio.sleep(15)
-            await ws_manager.cleanup_stale_connections()
+        try:
+            while True:
+                await asyncio.sleep(15)
+                await ws_manager.cleanup_stale_connections()
+        except asyncio.CancelledError:
+            pass
             
     stale_cleanup_task = asyncio.create_task(_stale_cleanup_loop())
 
@@ -1577,6 +1580,7 @@ async def lifespan(app: FastAPI):
             await stale_cleanup_task
         except asyncio.CancelledError:
             pass
+
         await lifecycle_manager.shutdown()
 
 # Initialize FastAPI app
