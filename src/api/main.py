@@ -1573,6 +1573,10 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         stale_cleanup_task.cancel()
+        try:
+            await stale_cleanup_task
+        except asyncio.CancelledError:
+            pass
         await lifecycle_manager.shutdown()
 
 # Initialize FastAPI app
